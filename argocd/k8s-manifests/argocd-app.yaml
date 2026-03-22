@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────
+#  argocd-app.yaml
+#
+#  WHERE TO PUT THIS FILE:
+#    Anywhere — apply it once to register your app with ArgoCD.
+#    You do NOT need to put this in your app repo.
+#
+#  WHAT THIS DOES:
+#    Tells ArgoCD:
+#      "Watch this Git repo folder,
+#       and keep this Kubernetes namespace in sync with it."
+#
+#  WHAT TO CHANGE:
+#    Every  ← CHANGE THIS  line
+#
+#  HOW TO APPLY:
+#    kubectl apply -f argocd-app.yaml
+#
+#  THEN CHECK:
+#    argocd app list
+#    argocd app get my-app
+# ─────────────────────────────────────────────────
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app            # ← CHANGE THIS — your app name (used in argocd CLI and Jenkinsfile)
+  namespace: argocd       # ← keep as argocd — this is ArgoCD's own namespace
+spec:
+  project: default
+
+  source:
+    # Your Git repo that contains the k8s/ folder
+    repoURL: https://github.com/YOUR_ORG/YOUR_REPO.git  # ← CHANGE THIS
+    targetRevision: main                                  # ← CHANGE THIS — branch to watch
+    path: k8s                                             # ← CHANGE THIS — folder in repo that has your YAML files
+
+  destination:
+    server: https://kubernetes.default.svc  # deploy to the same cluster ArgoCD runs in
+    namespace: my-app                        # ← CHANGE THIS — namespace to deploy into (must exist or see syncOptions)
+
+  syncPolicy:
+    automated:
+      prune: true      # delete resources from cluster when removed from Git
+      selfHeal: true   # re-sync if someone manually changes something in cluster
+    syncOptions:
+      - CreateNamespace=true  # auto-create namespace if it doesn't exist

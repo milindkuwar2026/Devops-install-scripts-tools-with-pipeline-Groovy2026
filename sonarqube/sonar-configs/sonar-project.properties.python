@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────
+#  sonar-project.properties  —  Python
+#
+#  WHERE TO PUT THIS FILE:
+#    Root of your Python app repo
+#    (same folder as requirements.txt)
+#    Rename to: sonar-project.properties
+#
+#  WHAT TO CHANGE:
+#    sonar.projectKey   ← must match SonarQube project key
+#    sonar.projectName  ← display name in SonarQube UI
+#
+#  ALSO ADD to your test command in Jenkinsfile:
+#    pytest tests/ --cov=. --cov-report=xml:coverage.xml
+#  This generates coverage.xml used below
+# ─────────────────────────────────────────────────
+
+sonar.projectKey=my-python-app            # ← CHANGE THIS
+sonar.projectName=My Python App           # ← CHANGE THIS
+sonar.projectVersion=1.0
+
+# Source code
+sonar.sources=.
+sonar.language=py
+
+# Coverage report (pytest-cov generates this)
+sonar.python.coverage.reportPaths=coverage.xml
+
+# Exclude from analysis
+sonar.exclusions=**/tests/**,**/__pycache__/**,**/migrations/**,**/venv/**,**/.venv/**,**/node_modules/**

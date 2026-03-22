@@ -1,0 +1,93 @@
+# ─────────────────────────────────────────────────
+#  k8s/deployment.yaml
+#
+#  WHERE TO PUT THIS FILE:
+#    In your app repo under a folder called k8s/
+#    Example: your-app/k8s/deployment.yaml
+#
+#  WHAT TO CHANGE:
+#    Every  ← CHANGE THIS  line
+#
+#  HOW IT WORKS WITH ARGOCD:
+#    ArgoCD watches your Git repo.
+#    When Jenkins pushes a new image tag,
+#    Jenkins tells ArgoCD to update image.tag.
+#    ArgoCD applies this file to Kubernetes.
+#    Kubernetes pulls the new image and rolls out.
+#
+#  HOW TO APPLY MANUALLY (without ArgoCD):
+#    kubectl apply -f k8s/deployment.yaml
+# ─────────────────────────────────────────────────
+
+---
+# ── Namespace — creates the space your app lives in ──
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-app     # ← CHANGE THIS — your app name, lowercase, no spaces
+
+---
+# ── Deployment — runs your app as pods ───────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app                # ← CHANGE THIS
+  namespace: my-app           # ← CHANGE THIS — match namespace above
+spec:
+  replicas: 2                 # ← CHANGE THIS — number of pod copies running at once
+  selector:
+    matchLabels:
+      app: my-app             # ← CHANGE THIS — must match template labels below
+  template:
+    metadata:
+      labels:
+        app: my-app           # ← CHANGE THIS — must match selector above
+    spec:
+      containers:
+        - name: my-app                                    # ← CHANGE THIS
+          image: your-dockerhub-user/my-app:latest        # ← CHANGE THIS
+          # ↑ ArgoCD / Jenkins will update the tag part (latest → v42 etc.)
+          ports:
+            - containerPort: 8080   # ← CHANGE THIS — port your app listens on
+          env:
+            - name: APP_ENV
+              value: "production"   # ← CHANGE THIS or remove this section
+          resources:
+            requests:
+              memory: "256Mi"   # ← minimum memory guaranteed to the pod
+              cpu: "100m"       # ← minimum CPU (100m = 0.1 of one core)
+            limits:
+              memory: "512Mi"   # ← maximum memory — pod is killed if exceeded
+              cpu: "500m"       # ← maximum CPU
+          readinessProbe:
+            # Kubernetes checks this endpoint before sending traffic to the pod
+            httpGet:
+              path: /health     # ← CHANGE THIS — your health check endpoint
+              port: 8080        # ← CHANGE THIS — match containerPort
+            initialDelaySeconds: 10    # wait this long before first check
+            periodSeconds: 5           # check every 5 seconds
+          livenessProbe:
+            # Kubernetes restarts the pod if this fails
+            httpGet:
+              path: /health     # ← CHANGE THIS
+              port: 8080        # ← CHANGE THIS
+            initialDelaySeconds: 30
+            periodSeconds: 10
+
+---
+# ── Service — exposes your app inside the cluster ─────
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-service    # ← CHANGE THIS
+  namespace: my-app       # ← CHANGE THIS — match namespace above
+spec:
+  selector:
+    app: my-app           # ← CHANGE THIS — match deployment labels above
+  ports:
+    - protocol: TCP
+      port: 80            # port that other services use to reach this app
+      targetPort: 8080    # ← CHANGE THIS — match containerPort above
+  type: ClusterIP         # ← ClusterIP = internal only (default, safe)
+                          #   NodePort   = accessible from outside via node IP
+                          #   LoadBalancer = cloud load balancer with public IP

@@ -1,0 +1,84 @@
+// ─────────────────────────────────────────────────
+//  Jenkins — Basic Pipeline
+//  Copy this file into your app repo root as: Jenkinsfile
+//
+//  CHANGE THESE VALUES:
+//    DOCKER_HUB_USER  ← your Docker Hub username
+//    IMAGE_NAME       ← name for your Docker image
+//    ARGOCD_SERVER    ← your ArgoCD server IP or domain
+//    ARGOCD_APP       ← your ArgoCD application name
+// ─────────────────────────────────────────────────
+
+def DOCKER_HUB_USER = "your-dockerhub-username"   // ← CHANGE THIS
+def IMAGE_NAME      = "my-app"                     // ← CHANGE THIS
+def ARGOCD_SERVER   = "argocd.example.com"         // ← CHANGE THIS
+def ARGOCD_APP      = "my-app"                     // ← CHANGE THIS
+
+// Do not change these
+def IMAGE_TAG  = "v${env.BUILD_NUMBER}"
+def FULL_IMAGE = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Code checked out — branch: ${env.GIT_BRANCH}"
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t ${FULL_IMAGE} ."
+                echo "✅ Built: ${FULL_IMAGE}"
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',      // must match ID in Jenkins Credentials
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    sh """
+                        echo \$DH_PASS | docker login -u \$DH_USER --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker logout
+                    """
+                }
+                echo "✅ Pushed: ${FULL_IMAGE}"
+            }
+        }
+
+        stage('Deploy via ArgoCD') {
+            steps {
+                withCredentials([string(
+                    credentialsId: 'argocd-token',         // must match ID in Jenkins Credentials
+                    variable: 'ARGOCD_TOKEN'
+                )]) {
+                    sh """
+                        argocd login ${ARGOCD_SERVER} --auth-token \$ARGOCD_TOKEN --insecure
+                        argocd app set ${ARGOCD_APP} --helm-set image.tag=${IMAGE_TAG}
+                        argocd app sync ${ARGOCD_APP} --force
+                        argocd app wait ${ARGOCD_APP} --health --timeout 180
+                    """
+                }
+                echo "✅ Deployed: ${ARGOCD_APP} @ ${IMAGE_TAG}"
+            }
+        }
+
+    }
+
+    post {
+        success { echo "🎉 Pipeline passed — ${FULL_IMAGE} is live" }
+        failure { echo "❌ Pipeline failed — check the red stage above" }
+        always  {
+            sh "docker rmi ${FULL_IMAGE} || true"
+            cleanWs()
+        }
+    }
+}

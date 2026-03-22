@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────
+#  k8s/config.yaml
+#
+#  WHERE TO PUT THIS:
+#    In your app repo at:  k8s/config.yaml
+#
+#  WHAT TO CHANGE:
+#    Every  ← CHANGE THIS  line
+#
+#  SECRET VALUES must be base64 encoded:
+#    Encode: echo -n "myvalue" | base64
+#    Decode: echo "bXl2YWx1ZQ==" | base64 -d
+# ─────────────────────────────────────────────────
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-app-config      # ← CHANGE THIS — match name in deployment.yaml
+  namespace: my-app        # ← CHANGE THIS
+data:
+  APP_ENV: "production"    # ← CHANGE THIS — add your config vars here
+  LOG_LEVEL: "info"        # ← CHANGE THIS
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-app-secrets     # ← CHANGE THIS — match name in deployment.yaml
+  namespace: my-app        # ← CHANGE THIS
+type: Opaque
+data:
+  # Encode values:  echo -n "mypassword" | base64
+  DB_PASSWORD: REPLACE_WITH_BASE64_VALUE   # ← CHANGE THIS
+  API_KEY: REPLACE_WITH_BASE64_VALUE       # ← CHANGE THIS

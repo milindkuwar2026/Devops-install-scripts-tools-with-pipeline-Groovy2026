@@ -1,0 +1,90 @@
+// ─────────────────────────────────────────────────
+//  Docker Permission Test + Build Pipeline
+//  Copy this into your app repo root as: Jenkinsfile
+//
+//  USE THIS TO:
+//    - Confirm Jenkins can run Docker after the fix
+//    - Build and push a Docker image
+//
+//  WHAT TO CHANGE:
+//    DOCKER_HUB_USER  ← your Docker Hub username
+//    IMAGE_NAME       ← your image name
+//
+//  CREDENTIAL NEEDED IN JENKINS:
+//    ID: dockerhub-creds  (Username + Password)
+// ─────────────────────────────────────────────────
+
+def DOCKER_HUB_USER = "your-dockerhub-username"   // ← CHANGE THIS
+def IMAGE_NAME      = "my-app"                     // ← CHANGE THIS
+
+def IMAGE_TAG  = "v${env.BUILD_NUMBER}"
+def FULL_IMAGE = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+pipeline {
+    agent any
+
+    stages {
+
+        // ── Confirm Docker works ──────────────────
+        // This stage will FAIL if permissions are not fixed
+        stage('Check Docker Access') {
+            steps {
+                echo "Checking Jenkins can access Docker..."
+                sh "docker version"
+                sh "docker ps"
+                echo "✅ Docker is accessible from Jenkins"
+            }
+        }
+
+        // ── Get the code ──────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        // ── Build image ───────────────────────────
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t ${FULL_IMAGE} ."
+                echo "✅ Built: ${FULL_IMAGE}"
+            }
+        }
+
+        // ── Push to Docker Hub ────────────────────
+        stage('Push Image') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    sh """
+                        echo \$DH_PASS | docker login -u \$DH_USER --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker logout
+                    """
+                }
+                echo "✅ Pushed: ${FULL_IMAGE}"
+            }
+        }
+
+    }
+
+    post {
+        success { echo "✅ Docker is working correctly in Jenkins" }
+        failure {
+            echo """
+            ❌ FAILED
+            If 'Check Docker Access' failed:
+              Run: sudo usermod -aG docker jenkins
+              Run: sudo systemctl restart jenkins
+              Then rebuild this pipeline
+            """
+        }
+        always {
+            sh "docker rmi ${FULL_IMAGE} || true"
+            cleanWs()
+        }
+    }
+}

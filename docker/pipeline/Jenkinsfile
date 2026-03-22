@@ -1,0 +1,96 @@
+// ─────────────────────────────────────────────────
+//  Docker — Build & Push Pipeline
+//  Copy this into your app repo root as: Jenkinsfile
+//
+//  WHAT TO CHANGE:
+//    DOCKER_HUB_USER  ← your Docker Hub username
+//    IMAGE_NAME       ← name for your image
+//
+//  CREDENTIALS NEEDED IN JENKINS:
+//    ID: dockerhub-creds  (Username + Password)
+//    → Manage Jenkins → Credentials → Global → Add
+// ─────────────────────────────────────────────────
+
+def DOCKER_HUB_USER = "your-dockerhub-username"   // ← CHANGE THIS
+def IMAGE_NAME      = "my-app"                     // ← CHANGE THIS
+
+def IMAGE_TAG  = "v${env.BUILD_NUMBER}"
+def FULL_IMAGE = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
+def LATEST     = "${DOCKER_HUB_USER}/${IMAGE_NAME}:latest"
+
+pipeline {
+    agent any
+
+    stages {
+
+        // ── 1. Get the code ──────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Code ready — branch: ${env.GIT_BRANCH}"
+            }
+        }
+
+        // ── 2. Build the Docker image ─────────────
+        stage('Build Image') {
+            steps {
+                echo "Building: ${FULL_IMAGE}"
+                sh """
+                    docker build \
+                        --tag ${FULL_IMAGE} \
+                        --tag ${LATEST} \
+                        --build-arg BUILD_NUMBER=${env.BUILD_NUMBER} \
+                        .
+                """
+                echo "✅ Image built"
+            }
+        }
+
+        // ── 3. Push to Docker Hub ─────────────────
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    sh """
+                        echo \$DH_PASS | docker login -u \$DH_USER --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker push ${LATEST}
+                        docker logout
+                    """
+                }
+                echo "✅ Pushed:"
+                echo "   ${FULL_IMAGE}"
+                echo "   ${LATEST}"
+            }
+        }
+
+        // ── 4. Clean up local image ───────────────
+        stage('Cleanup') {
+            steps {
+                sh "docker rmi ${FULL_IMAGE} ${LATEST} || true"
+                echo "✅ Local images removed"
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo """
+            ✅ SUCCESS
+            Image : ${FULL_IMAGE}
+            Also  : ${LATEST}
+            View  : https://hub.docker.com/r/${DOCKER_HUB_USER}/${IMAGE_NAME}
+            """
+        }
+        failure {
+            echo "❌ FAILED — check the stage that went red above"
+        }
+        always {
+            cleanWs()
+        }
+    }
+}

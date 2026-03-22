@@ -1,0 +1,150 @@
+// ─────────────────────────────────────────────────
+//  ArgoCD — Deploy Pipeline
+//  Copy this into your app repo root as: Jenkinsfile
+//
+//  THIS PIPELINE DOES:
+//    1. Checkout code
+//    2. Build Docker image
+//    3. Push to Docker Hub
+//    4. Tell ArgoCD to deploy new image tag
+//    5. Wait for deployment to be healthy
+//
+//  WHAT TO CHANGE:
+//    Fill in every value in the CONFIG block below.
+//
+//  CREDENTIALS NEEDED IN JENKINS:
+//    dockerhub-creds  → Username+Password  (Docker Hub)
+//    argocd-token     → Secret text        (ArgoCD API token)
+//
+//  ARGOCD SETUP NEEDED:
+//    - ArgoCD Application created (see README Step 8)
+//    - App name must match ARGOCD_APP below
+//    - Your k8s/deployment.yaml must be in Git repo
+// ─────────────────────────────────────────────────
+
+// ── CONFIG — change all of these ─────────────────
+def DOCKER_HUB_USER = "your-dockerhub-username"   // ← CHANGE: Docker Hub username
+def IMAGE_NAME      = "my-app"                     // ← CHANGE: image name
+def ARGOCD_SERVER   = "argocd.example.com"         // ← CHANGE: ArgoCD server IP or domain
+                                                   //   e.g. "192.168.1.50:8080"
+                                                   //   e.g. "argocd.mycompany.com"
+def ARGOCD_APP      = "my-app"                     // ← CHANGE: ArgoCD application name
+                                                   //   (the name you created in ArgoCD UI)
+// ─────────────────────────────────────────────────
+
+def IMAGE_TAG  = "v${env.BUILD_NUMBER}"
+def FULL_IMAGE = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+pipeline {
+    agent any
+
+    stages {
+
+        // ── Stage 1: Get the code ─────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Code ready — commit: ${env.GIT_COMMIT?.take(8)}"
+            }
+        }
+
+        // ── Stage 2: Build Docker image ───────────
+        stage('Build Image') {
+            steps {
+                echo "🔨 Building: ${FULL_IMAGE}"
+                sh "docker build -t ${FULL_IMAGE} ."
+                echo "✅ Image built"
+            }
+        }
+
+        // ── Stage 3: Push image to Docker Hub ─────
+        stage('Push Image') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    sh """
+                        echo \$DH_PASS | docker login -u \$DH_USER --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker logout
+                    """
+                }
+                echo "✅ Pushed: ${FULL_IMAGE}"
+            }
+        }
+
+        // ── Stage 4: Update ArgoCD app ────────────
+        // This tells ArgoCD to use the new image tag
+        stage('Update ArgoCD Image Tag') {
+            steps {
+                withCredentials([string(
+                    credentialsId: 'argocd-token',
+                    variable: 'ARGOCD_TOKEN'
+                )]) {
+                    sh """
+                        # Login to ArgoCD
+                        argocd login ${ARGOCD_SERVER} \
+                            --auth-token \$ARGOCD_TOKEN \
+                            --insecure
+
+                        # Tell ArgoCD to use the new image tag
+                        argocd app set ${ARGOCD_APP} \
+                            --helm-set image.tag=${IMAGE_TAG}
+                    """
+                }
+                echo "✅ ArgoCD app updated to tag: ${IMAGE_TAG}"
+            }
+        }
+
+        // ── Stage 5: Sync and wait ─────────────────
+        // ArgoCD applies the change and waits for health
+        stage('Deploy & Wait') {
+            steps {
+                withCredentials([string(
+                    credentialsId: 'argocd-token',
+                    variable: 'ARGOCD_TOKEN'
+                )]) {
+                    sh """
+                        argocd login ${ARGOCD_SERVER} \
+                            --auth-token \$ARGOCD_TOKEN \
+                            --insecure
+
+                        # Sync = apply changes from Git to cluster
+                        argocd app sync ${ARGOCD_APP} --force
+
+                        # Wait until all pods are healthy (or fail after 3 min)
+                        argocd app wait ${ARGOCD_APP} \
+                            --health \
+                            --timeout 180
+                    """
+                }
+                echo "✅ Deployment complete — ${ARGOCD_APP} is healthy"
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo """
+            ✅ DEPLOY SUCCESS
+            Image     : ${FULL_IMAGE}
+            App       : ${ARGOCD_APP}
+            ArgoCD    : https://${ARGOCD_SERVER}
+            """
+        }
+        failure {
+            echo """
+            ❌ DEPLOY FAILED
+            Check which stage went red above.
+            If Deploy & Wait failed → check ArgoCD UI for pod errors.
+            """
+        }
+        always {
+            sh "docker rmi ${FULL_IMAGE} || true"
+            cleanWs()
+        }
+    }
+}

@@ -1,0 +1,170 @@
+// ─────────────────────────────────────────────────
+//  SonarQube — Full Pipeline
+//  Copy this into your app repo root as: Jenkinsfile
+//
+//  THIS PIPELINE DOES:
+//    1. Checkout code
+//    2. SonarQube scan
+//    3. Quality Gate check  ← stops deploy if code quality fails
+//    4. Build Docker image
+//    5. Push to Docker Hub
+//    6. Deploy via ArgoCD
+//
+//  WHAT TO CHANGE:
+//    Fill in every value in the CONFIG block below.
+//
+//  CREDENTIALS NEEDED IN JENKINS:
+//    sonar-token    → Secret text        (SonarQube token)
+//    dockerhub-creds → Username+Password (Docker Hub)
+//    argocd-token   → Secret text        (ArgoCD token)
+//
+//  JENKINS PLUGIN NEEDED:
+//    SonarQube Scanner  (Manage Jenkins → Plugins → Available)
+//
+//  JENKINS SYSTEM SETTING NEEDED:
+//    Manage Jenkins → System → SonarQube Servers
+//    → Name: SonarQube
+//    → URL:  http://YOUR_SONAR_IP:9000
+// ─────────────────────────────────────────────────
+
+// ── CONFIG — change all of these ─────────────────
+def SONAR_PROJECT_KEY  = "my-app"                   // ← CHANGE: SonarQube project key
+def SONAR_PROJECT_NAME = "My App"                   // ← CHANGE: display name in SonarQube UI
+def SONAR_SERVER_NAME  = "SonarQube"                // ← must match name in Jenkins System settings
+
+def DOCKER_HUB_USER    = "your-dockerhub-username"  // ← CHANGE: your Docker Hub username
+def IMAGE_NAME         = "my-app"                   // ← CHANGE: your image name
+
+def ARGOCD_SERVER      = "argocd.example.com"       // ← CHANGE: your ArgoCD server IP or domain
+def ARGOCD_APP         = "my-app"                   // ← CHANGE: your ArgoCD application name
+// ─────────────────────────────────────────────────
+
+def IMAGE_TAG  = "v${env.BUILD_NUMBER}"
+def FULL_IMAGE = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+pipeline {
+    agent any
+
+    stages {
+
+        // ── Stage 1: Get the code ─────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Code ready — branch: ${env.GIT_BRANCH}"
+            }
+        }
+
+        // ── Stage 2: Scan code with SonarQube ─────
+        stage('SonarQube Scan') {
+            steps {
+                echo "🔍 Starting SonarQube analysis..."
+                withSonarQubeEnv("${SONAR_SERVER_NAME}") {
+                    // For Java/Maven projects:
+                    sh """
+                        sonar-scanner \
+                            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                            -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
+                            -Dsonar.sources=. \
+                            -Dsonar.exclusions=**/node_modules/**,**/.git/**,**/target/**
+                    """
+
+                    // For Java/Maven — comment out the above and uncomment this:
+                    // sh "mvn sonar:sonar -Dsonar.projectKey=${SONAR_PROJECT_KEY} -B"
+                }
+                echo "✅ SonarQube scan complete"
+            }
+        }
+
+        // ── Stage 3: Check the Quality Gate ───────
+        // If code quality fails, pipeline stops here.
+        // No Docker build. No deploy. Code must be fixed first.
+        stage('Quality Gate') {
+            steps {
+                echo "🚦 Waiting for SonarQube Quality Gate result..."
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                    // abortPipeline: true  = stop pipeline if quality gate FAILS
+                    // abortPipeline: false = warn but continue (not recommended)
+                }
+                echo "✅ Quality Gate PASSED — code is clean"
+            }
+        }
+
+        // ── Stage 4: Build Docker image ───────────
+        stage('Build Image') {
+            steps {
+                echo "🔨 Building Docker image: ${FULL_IMAGE}"
+                sh "docker build -t ${FULL_IMAGE} ."
+                echo "✅ Image built"
+            }
+        }
+
+        // ── Stage 5: Push to Docker Hub ───────────
+        stage('Push Image') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    sh """
+                        echo \$DH_PASS | docker login -u \$DH_USER --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker logout
+                    """
+                }
+                echo "✅ Pushed: ${FULL_IMAGE}"
+            }
+        }
+
+        // ── Stage 6: Deploy via ArgoCD ────────────
+        stage('Deploy') {
+            steps {
+                withCredentials([string(
+                    credentialsId: 'argocd-token',
+                    variable: 'ARGOCD_TOKEN'
+                )]) {
+                    sh """
+                        argocd login ${ARGOCD_SERVER} \
+                            --auth-token \$ARGOCD_TOKEN \
+                            --insecure
+
+                        argocd app set ${ARGOCD_APP} \
+                            --helm-set image.tag=${IMAGE_TAG}
+
+                        argocd app sync ${ARGOCD_APP} --force
+                        argocd app wait ${ARGOCD_APP} --health --timeout 180
+                    """
+                }
+                echo "✅ Deployed: ${ARGOCD_APP} running image tag ${IMAGE_TAG}"
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo """
+            ╔══════════════════════════════════════════╗
+            ║  ✅ PIPELINE SUCCESS                     ║
+            ╠══════════════════════════════════════════╣
+            ║  Quality Gate : PASSED                   ║
+            ║  Image        : ${FULL_IMAGE}
+            ║  Deployed to  : ${ARGOCD_APP}            ║
+            ╚══════════════════════════════════════════╝
+            """
+        }
+        failure {
+            echo """
+            ❌ PIPELINE FAILED
+            Check the red stage above.
+            If Quality Gate failed → fix code issues shown in SonarQube UI.
+            """
+        }
+        always {
+            sh "docker rmi ${FULL_IMAGE} || true"
+            cleanWs()
+        }
+    }
+}

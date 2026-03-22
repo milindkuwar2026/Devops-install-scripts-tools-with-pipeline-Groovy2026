@@ -1,0 +1,311 @@
+// ═══════════════════════════════════════════════════════════
+//  FULL CI/CD PIPELINE
+//  Jenkins → SonarQube → Docker → ArgoCD → Kubernetes
+//
+//  SUPPORTS: Java (Maven), Node.js, Python
+//
+//  COPY THIS FILE to your app repo root as:  Jenkinsfile
+//
+//  ─── BEFORE RUNNING: ────────────────────────────────────
+//
+//  1. Fill in CONFIG block below (every ← CHANGE THIS)
+//
+//  2. Add these credentials in Jenkins:
+//     Manage Jenkins → Credentials → Global → Add Credentials
+//
+//     ID: sonar-token       Kind: Secret text         ← SonarQube token
+//     ID: dockerhub-creds   Kind: Username+Password   ← Docker Hub login
+//     ID: argocd-token      Kind: Secret text         ← ArgoCD API token
+//
+//  3. Add SonarQube server in Jenkins:
+//     Manage Jenkins → System → SonarQube Servers
+//     Name: SonarQube  |  URL: http://YOUR_SONAR_IP:9000
+//
+//  4. Install Jenkins plugins:
+//     - SonarQube Scanner
+//     - Docker Pipeline
+//     - Pipeline
+//     - Git
+// ═══════════════════════════════════════════════════════════
+
+
+// ──────────────────────────────────────────────────────────
+//  ⚙️  CONFIG — fill in every value here
+// ──────────────────────────────────────────────────────────
+
+// Which language is your app?
+// Options: "java"  |  "nodejs"  |  "python"
+def LANGUAGE = "java"                          // ← CHANGE THIS
+
+// SonarQube settings
+def SONAR_PROJECT_KEY  = "my-app"              // ← CHANGE THIS (must match SonarQube project key)
+def SONAR_PROJECT_NAME = "My App"              // ← CHANGE THIS (display name in SonarQube UI)
+def SONAR_SERVER_NAME  = "SonarQube"           // ← must match name in Jenkins → System → SonarQube Servers
+
+// Docker Hub settings
+def DOCKER_HUB_USER = "your-dockerhub-username" // ← CHANGE THIS
+def IMAGE_NAME      = "my-app"                   // ← CHANGE THIS (name for your Docker image)
+
+// ArgoCD settings
+def ARGOCD_SERVER = "argocd.example.com"         // ← CHANGE THIS (IP or domain of ArgoCD server)
+def ARGOCD_APP    = "my-app"                     // ← CHANGE THIS (name of app created in ArgoCD UI)
+
+// ──────────────────────────────────────────────────────────
+//  Do not change below this line
+// ──────────────────────────────────────────────────────────
+def IMAGE_TAG  = "v${env.BUILD_NUMBER}"
+def FULL_IMAGE = "${DOCKER_HUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+pipeline {
+    agent any
+
+    stages {
+
+        // ══════════════════════════════════════════
+        //  STAGE 1 — Checkout
+        //  Gets your source code from Git
+        // ══════════════════════════════════════════
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "✅ Code checked out"
+                echo "   Branch : ${env.GIT_BRANCH}"
+                echo "   Commit : ${env.GIT_COMMIT?.take(8)}"
+            }
+        }
+
+
+        // ══════════════════════════════════════════
+        //  STAGE 2 — Test
+        //  Runs unit tests for your language
+        //  ⚠️  If tests fail → pipeline stops here
+        // ══════════════════════════════════════════
+        stage('Test') {
+            steps {
+                script {
+                    if (LANGUAGE == "java") {
+                        echo "Running Maven tests..."
+                        sh "mvn test -B"
+                        // Publish test results in Jenkins UI
+                        junit '**/target/surefire-reports/*.xml'
+
+                    } else if (LANGUAGE == "nodejs") {
+                        echo "Running npm tests..."
+                        sh "npm ci"
+                        sh "npm test -- --coverage"
+
+                    } else if (LANGUAGE == "python") {
+                        echo "Running pytest..."
+                        sh """
+                            pip install -r requirements.txt -q
+                            pip install pytest pytest-cov -q
+                            pytest tests/ -v \
+                                --junitxml=test-results.xml \
+                                --cov=. \
+                                --cov-report=xml:coverage.xml
+                        """
+                        junit allowEmptyResults: true, testResults: 'test-results.xml'
+                    }
+                }
+                echo "✅ Tests passed"
+            }
+        }
+
+
+        // ══════════════════════════════════════════
+        //  STAGE 3 — SonarQube Scan
+        //  Analyses code quality and security
+        //  Results appear in SonarQube dashboard
+        // ══════════════════════════════════════════
+        stage('SonarQube Scan') {
+            steps {
+                echo "🔍 Scanning code with SonarQube..."
+                withSonarQubeEnv("${SONAR_SERVER_NAME}") {
+                    script {
+                        if (LANGUAGE == "java") {
+                            // Maven handles the scan — reads from pom.xml
+                            sh """
+                                mvn sonar:sonar \
+                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                    -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
+                                    -B
+                            """
+
+                        } else {
+                            // sonar-scanner reads from sonar-project.properties
+                            // Make sure sonar-project.properties exists in your repo root
+                            sh """
+                                sonar-scanner \
+                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                    -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
+                                    -Dsonar.sources=.
+                            """
+                        }
+                    }
+                }
+                echo "✅ SonarQube scan complete"
+            }
+        }
+
+
+        // ══════════════════════════════════════════
+        //  STAGE 4 — Quality Gate
+        //  Waits for SonarQube to finish analysing
+        //  and checks if code meets the quality rules.
+        //
+        //  ⚠️  If Quality Gate FAILS:
+        //    - Pipeline stops HERE
+        //    - Docker image is NOT built
+        //    - Nothing is deployed
+        //    - Fix the issues shown in SonarQube UI
+        //      then re-run the pipeline
+        // ══════════════════════════════════════════
+        stage('Quality Gate') {
+            steps {
+                echo "🚦 Checking Quality Gate..."
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+                echo "✅ Quality Gate PASSED — code meets quality standards"
+            }
+        }
+
+
+        // ══════════════════════════════════════════
+        //  STAGE 5 — Build Docker Image
+        //  Creates a Docker image from your Dockerfile
+        //  Tags it with the Jenkins build number
+        // ══════════════════════════════════════════
+        stage('Build Docker Image') {
+            steps {
+                echo "🔨 Building Docker image..."
+                sh "docker build -t ${FULL_IMAGE} ."
+                echo "✅ Built: ${FULL_IMAGE}"
+            }
+        }
+
+
+        // ══════════════════════════════════════════
+        //  STAGE 6 — Push to Docker Hub
+        //  Uploads the image so Kubernetes can pull it
+        // ══════════════════════════════════════════
+        stage('Push to Docker Hub') {
+            steps {
+                echo "📤 Pushing image to Docker Hub..."
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
+                    sh """
+                        echo \$DH_PASS | docker login -u \$DH_USER --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker logout
+                    """
+                }
+                echo "✅ Pushed: ${FULL_IMAGE}"
+            }
+        }
+
+
+        // ══════════════════════════════════════════
+        //  STAGE 7 — Deploy via ArgoCD
+        //  Tells ArgoCD to update the Kubernetes
+        //  Deployment to use the new image tag.
+        //  ArgoCD then syncs Kubernetes automatically.
+        // ══════════════════════════════════════════
+        stage('Deploy via ArgoCD') {
+            steps {
+                echo "🚀 Deploying to Kubernetes via ArgoCD..."
+                withCredentials([string(
+                    credentialsId: 'argocd-token',
+                    variable: 'ARGOCD_TOKEN'
+                )]) {
+                    sh """
+                        # Login to ArgoCD server
+                        argocd login ${ARGOCD_SERVER} \
+                            --auth-token \$ARGOCD_TOKEN \
+                            --insecure
+
+                        # Update the image tag in the ArgoCD app
+                        argocd app set ${ARGOCD_APP} \
+                            --helm-set image.tag=${IMAGE_TAG}
+
+                        # Apply the changes to Kubernetes
+                        argocd app sync ${ARGOCD_APP} --force
+                    """
+                }
+                echo "✅ Sync triggered for: ${ARGOCD_APP}"
+            }
+        }
+
+
+        // ══════════════════════════════════════════
+        //  STAGE 8 — Wait for Deployment Health
+        //  Waits until Kubernetes says all pods
+        //  are running and healthy.
+        //  Pipeline fails if pods don't become
+        //  healthy within 3 minutes.
+        // ══════════════════════════════════════════
+        stage('Verify Deployment') {
+            steps {
+                echo "⏳ Waiting for deployment to be healthy..."
+                withCredentials([string(
+                    credentialsId: 'argocd-token',
+                    variable: 'ARGOCD_TOKEN'
+                )]) {
+                    sh """
+                        argocd login ${ARGOCD_SERVER} \
+                            --auth-token \$ARGOCD_TOKEN \
+                            --insecure
+
+                        argocd app wait ${ARGOCD_APP} \
+                            --health \
+                            --timeout 180
+                    """
+                }
+                echo "✅ Deployment is healthy — new version is live!"
+            }
+        }
+
+    }
+
+
+    // ══════════════════════════════════════════════
+    //  POST — runs after all stages finish
+    // ══════════════════════════════════════════════
+    post {
+        success {
+            echo """
+╔══════════════════════════════════════════════════════╗
+║  ✅  PIPELINE SUCCESS                                ║
+╠══════════════════════════════════════════════════════╣
+║  Tests         : PASSED                              ║
+║  Quality Gate  : PASSED                              ║
+║  Image         : ${FULL_IMAGE}
+║  Deployed to   : ${ARGOCD_APP}                       ║
+╚══════════════════════════════════════════════════════╝
+            """
+        }
+        failure {
+            echo """
+╔══════════════════════════════════════════════════════╗
+║  ❌  PIPELINE FAILED                                 ║
+╠══════════════════════════════════════════════════════╣
+║  Check the RED stage above to see what went wrong.   ║
+║                                                      ║
+║  Stage 2 Test failed     → fix failing tests         ║
+║  Stage 4 Quality Gate    → fix issues in SonarQube   ║
+║  Stage 5/6 Docker failed → check Dockerfile          ║
+║  Stage 7/8 Deploy failed → check ArgoCD dashboard    ║
+╚══════════════════════════════════════════════════════╝
+            """
+        }
+        always {
+            // Clean up Docker image from Jenkins server to save disk space
+            sh "docker rmi ${FULL_IMAGE} || true"
+            // Clean up workspace files
+            cleanWs()
+        }
+    }
+}

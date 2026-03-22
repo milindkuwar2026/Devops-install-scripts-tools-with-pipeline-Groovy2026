@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────
+#  sonar-project.properties  —  Node.js / React / Vue
+#
+#  WHERE TO PUT THIS FILE:
+#    Root of your Node.js app repo
+#    (same folder as package.json)
+#    Rename to: sonar-project.properties
+#
+#  WHAT TO CHANGE:
+#    sonar.projectKey   ← must match SonarQube project key
+#    sonar.projectName  ← display name in SonarQube UI
+#
+#  ALSO ADD to your package.json scripts:
+#    "test": "jest --coverage --coverageReporters=lcov"
+#  This generates coverage/lcov.info used below
+# ─────────────────────────────────────────────────
+
+sonar.projectKey=my-nodejs-app            # ← CHANGE THIS
+sonar.projectName=My NodeJS App           # ← CHANGE THIS
+sonar.projectVersion=1.0
+
+# Where your source code lives
+sonar.sources=src
+
+# Where your tests live
+sonar.tests=src
+sonar.test.inclusions=**/*.test.js,**/*.spec.js,**/*.test.ts,**/*.spec.ts
+
+# Coverage report (Jest generates this at coverage/lcov.info)
+sonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+# Exclude from analysis
+sonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/*.test.js,**/*.spec.js
+
+# For TypeScript projects — uncomment:
+# sonar.typescript.lcov.reportPaths=coverage/lcov.info

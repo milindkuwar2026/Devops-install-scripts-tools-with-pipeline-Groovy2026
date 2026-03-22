@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────
+#  k8s/deployment.yaml
+#
+#  WHERE TO PUT THIS:
+#    In your app repo at:  k8s/deployment.yaml
+#
+#  WHAT TO CHANGE:
+#    Every  ← CHANGE THIS  line
+#
+#  ArgoCD watches this file.
+#  When Jenkins updates the image tag via argocd app set,
+#  ArgoCD re-applies this file with the new tag.
+# ─────────────────────────────────────────────────
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-app             # ← CHANGE THIS
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app             # ← CHANGE THIS
+  namespace: my-app        # ← CHANGE THIS — match namespace above
+spec:
+  replicas: 2              # ← CHANGE THIS — how many pod copies to run
+  selector:
+    matchLabels:
+      app: my-app          # ← CHANGE THIS
+  template:
+    metadata:
+      labels:
+        app: my-app        # ← CHANGE THIS
+    spec:
+      containers:
+        - name: my-app     # ← CHANGE THIS
+          image: your-dockerhub-user/my-app:latest   # ← CHANGE THIS
+          # Jenkins + ArgoCD will update the tag (latest → v42)
+          ports:
+            - containerPort: 8080  # ← CHANGE THIS — your app's port
+          envFrom:
+            - configMapRef:
+                name: my-app-config    # ← CHANGE THIS — match config.yaml
+            - secretRef:
+                name: my-app-secrets   # ← CHANGE THIS — match config.yaml
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /health    # ← CHANGE THIS — your health endpoint
+              port: 8080       # ← CHANGE THIS — your app port
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health    # ← CHANGE THIS
+              port: 8080       # ← CHANGE THIS
+            initialDelaySeconds: 30
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-svc         # ← CHANGE THIS
+  namespace: my-app        # ← CHANGE THIS
+spec:
+  selector:
+    app: my-app            # ← CHANGE THIS — match deployment labels
+  ports:
+    - port: 80
+      targetPort: 8080     # ← CHANGE THIS — match containerPort
+  type: ClusterIP          # ← ClusterIP / NodePort / LoadBalancer

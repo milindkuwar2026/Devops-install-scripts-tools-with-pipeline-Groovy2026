@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────
+#  k8s/config.yaml
+#
+#  WHERE TO PUT THIS FILE:
+#    In your app repo under k8s/config.yaml
+#    alongside deployment.yaml
+#
+#  WHAT THIS IS:
+#    ConfigMap  = non-sensitive config (URLs, flags, settings)
+#    Secret     = sensitive values (passwords, tokens, API keys)
+#
+#  WHAT TO CHANGE:
+#    Every  ← CHANGE THIS  line
+#
+#  SECRET VALUES MUST BE BASE64 ENCODED:
+#    Run this to encode:  echo -n "mypassword" | base64
+#    Run this to decode:  echo "bXlwYXNzd29yZA==" | base64 -d
+# ─────────────────────────────────────────────────
+
+---
+# ── ConfigMap — non-sensitive values ─────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-app-config     # ← CHANGE THIS
+  namespace: my-app       # ← CHANGE THIS — match your namespace
+data:
+  APP_ENV: "production"              # ← CHANGE THIS — add your own config keys
+  LOG_LEVEL: "info"                  # ← CHANGE THIS
+  API_BASE_URL: "https://api.example.com"  # ← CHANGE THIS
+
+---
+# ── Secret — sensitive values ─────────────────────
+# ⚠️  Values MUST be base64 encoded
+# Example: echo -n "my-secret-password" | base64
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-app-secrets    # ← CHANGE THIS
+  namespace: my-app       # ← CHANGE THIS — match your namespace
+type: Opaque
+data:
+  DB_PASSWORD: REPLACE_WITH_BASE64   # ← CHANGE THIS  (echo -n "yourpassword" | base64)
+  API_KEY: REPLACE_WITH_BASE64       # ← CHANGE THIS  (echo -n "yourapikey" | base64)
+
+# ─────────────────────────────────────────────────
+# HOW TO USE THESE IN YOUR deployment.yaml:
+#
+# Option A — inject all ConfigMap keys as env vars:
+#   envFrom:
+#   - configMapRef:
+#       name: my-app-config
+#
+# Option B — inject all Secret keys as env vars:
+#   envFrom:
+#   - secretRef:
+#       name: my-app-secrets
+#
+# Option C — inject one specific key:
+#   env:
+#   - name: DB_PASSWORD
+#     valueFrom:
+#       secretKeyRef:
+#         name: my-app-secrets
+#         key: DB_PASSWORD
+# ─────────────────────────────────────────────────
